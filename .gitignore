@@ -40,6 +40,9 @@ out/
 ### VS Code ###
 .vscode/
 
+### Python ###
+__pycache__/
+
 # Certificates #
 *.pem
 *.crt

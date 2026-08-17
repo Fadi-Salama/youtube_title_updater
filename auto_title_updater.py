@@ -7,6 +7,10 @@ titled from the weekly service schedule, binds it to the reusable stream key
 OBS is actually using, and drives it live. When OBS stops, the broadcast is
 completed. If a broadcast is already live it is renamed instead of duplicated.
 
+On days that coptic.io (a free, MIT-licensed public calendar API) reports an
+actual feast (not merely a fasting season), its name overrides the weekly
+schedule title. Lookup failures are non-fatal; the weekly schedule is used.
+
 Lifecycle control is fully manual (enableAutoStart=False) because:
   * autostart only fires on the ingest stream's inactive -> active edge, which
     has usually already passed by the time we bind (OBS starts pushing first);
@@ -30,6 +34,7 @@ Requires:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -39,6 +44,8 @@ import signal
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 from zoneinfo import ZoneInfo
@@ -176,6 +183,24 @@ WEEKDAY_NAMES = ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
                  'Friday', 'Saturday', 'Sunday')
 
 
+# ===========================================================================
+# COPTIC CALENDAR INTEGRATION  (coptic.io)
+# ===========================================================================
+# Free, open-source (MIT), no API key required: https://github.com/abanobmikaeel/coptic.io
+# The API's celebration 'type' values are inconsistent across entries (seen:
+# 'feast', 'lordlyFeast', 'majorFeast', 'minorFeast', 'fast', 'commemoration'),
+# so we exclude rather than allow-list: anything but a fast/commemoration is
+# treated as a title-worthy feast. Continuous fasting seasons (e.g. 'St. Mary
+# Fast') are reported for every day within them and are never used as a title.
+# 'lordlyFeast'/'majorFeast' identify the 7 major Lord's feasts; their title
+# is applied a day early (the eve) when today itself has no feast of its own.
+COPTIC_CALENDAR_ENABLED = True
+COPTIC_API_BASE_URL = 'https://api.coptic.io/api'
+COPTIC_API_TIMEOUT_SECONDS = 8
+COPTIC_FEAST_EXCLUDE_TYPES = {'fast', 'commemoration'}
+COPTIC_LORDLY_FEAST_TYPES = {'lordlyFeast', 'majorFeast'}
+
+
 def validate_schedule() -> list[str]:
     """Return a list of human-readable problems with SERVICE_SCHEDULE."""
     problems: list[str] = []
@@ -221,17 +246,137 @@ def _fit(base: str, date_str: str, suffix: str) -> str:
     return base[:keep].rstrip() + tail
 
 
-def generate_title(now: datetime | None = None) -> str:
+def generate_title(now: datetime | None = None, feast_title: str | None = None) -> str:
     now = now or datetime.now()
     minutes = now.hour * 60 + now.minute
 
-    base_title = DEFAULT_TITLE
-    for weekday, (sh, sm), (eh, em), title in SERVICE_SCHEDULE:
-        if now.weekday() == weekday and sh * 60 + sm <= minutes < eh * 60 + em:
-            base_title = title
-            break
+    base_title = f'+++ {feast_title}' if feast_title else DEFAULT_TITLE
+    if not feast_title:
+        for weekday, (sh, sm), (eh, em), title in SERVICE_SCHEDULE:
+            if now.weekday() == weekday and sh * 60 + sm <= minutes < eh * 60 + em:
+                base_title = title
+                break
 
     return _fit(base_title, now.strftime('%d/%m/%Y'), _suffix_for(base_title))
+
+
+def fetch_coptic_celebrations(date_str: str) -> list[dict]:
+    """Blocking GET against coptic.io; call via asyncio.to_thread."""
+    url = f'{COPTIC_API_BASE_URL}/celebrations/{date_str}'
+    request = urllib.request.Request(
+        url, headers={'User-Agent': 'auto-title-updater (coptic.io client)'}
+    )
+    with urllib.request.urlopen(request, timeout=COPTIC_API_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode('utf-8')) or []
+
+
+def _feast_display_name(name: str) -> str:
+    if 'easter' in name.lower():        # traditional Coptic name over the API's
+        name = 'Resurrection'
+    return name if 'feast' in name.lower() else f'Feast of the {name}'
+
+
+def pick_feast_title(celebrations: list[dict]) -> str | None:
+    """First non-fast/commemoration entry, worded to always read as a feast."""
+    for item in celebrations:
+        name = item.get('name')
+        if isinstance(name, str) and item.get('type') not in COPTIC_FEAST_EXCLUDE_TYPES:
+            return _feast_display_name(name)
+    return None
+
+
+def pick_lordly_feast_title(celebrations: list[dict]) -> str | None:
+    """Restricted to the 7-major-feasts types; used for the eve-of override."""
+    for item in celebrations:
+        name = item.get('name')
+        if isinstance(name, str) and item.get('type') in COPTIC_LORDLY_FEAST_TYPES:
+            return _feast_display_name(name)
+    return None
+
+
+def resolve_feast_title(date_str: str) -> str | None:
+    """Today's own feast takes priority; otherwise, if tomorrow is a major
+    Lordly feast, its title is used tonight -- the eve of the feast."""
+    feast_title = pick_feast_title(fetch_coptic_celebrations(date_str))
+    if feast_title:
+        return feast_title
+
+    next_date_str = (datetime.strptime(date_str, '%Y-%m-%d')
+                     + timedelta(days=1)).strftime('%Y-%m-%d')
+    return pick_lordly_feast_title(fetch_coptic_celebrations(next_date_str))
+
+
+# -- CLI preview helpers (see `python auto_title_updater.py preview --help`) --
+def _parse_preview_datetime(value: str) -> tuple[datetime, bool]:
+    """Returns (datetime, had_time); had_time=False if only a date was given."""
+    for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%dT%H:%M'):
+        try:
+            return datetime.strptime(value, fmt), True
+        except ValueError:
+            continue
+    return datetime.strptime(value, '%Y-%m-%d'), False
+
+
+def _fetch_feast_title_safe(date_str: str) -> str | None:
+    if not COPTIC_CALENDAR_ENABLED:
+        return None
+    try:
+        return resolve_feast_title(date_str)
+    except Exception as exc:
+        print(f'  (coptic.io lookup failed for {date_str}: {exc})')
+        return None
+
+
+def preview_titles(values: list[str], use_coptic: bool = True) -> None:
+    """Offline CLI helper: print the title(s) that would be generated.
+    A bare date (no time) prints every scheduled window for that weekday
+    plus the no-service default; a full datetime prints a single title.
+    Only the first window/moment of a given date gets the feast override --
+    later ones that day fall back to the weekly schedule, mirroring the bot."""
+    tracker = _FeastOnceTracker()
+    for value in values:
+        when, had_time = _parse_preview_datetime(value)
+        date_str = when.strftime('%Y-%m-%d')
+        raw_feast_title = _fetch_feast_title_safe(date_str) if use_coptic else None
+        feast_note = f'  {raw_feast_title}' if raw_feast_title else ''
+
+        if had_time:
+            title = generate_title(when, feast_title=tracker.consume(date_str, raw_feast_title))
+            print(f'{when:%Y-%m-%d %H:%M} ({WEEKDAY_NAMES[when.weekday()]}): {title}{feast_note}')
+            continue
+
+        print(f'{when:%Y-%m-%d} ({WEEKDAY_NAMES[when.weekday()]}){feast_note}')
+        windows = [w for w in SERVICE_SCHEDULE if w[0] == when.weekday()]
+        if not windows:
+            title = generate_title(when.replace(hour=12, minute=0),
+                                    feast_title=tracker.consume(date_str, raw_feast_title))
+            print(f'    (no scheduled service)     -> {title}')
+        for _, (sh, sm), (eh, em), _ in windows:
+            moment = when.replace(hour=sh, minute=sm)
+            title = generate_title(moment, feast_title=tracker.consume(date_str, raw_feast_title))
+            print(f'    {sh:02d}:{sm:02d}-{eh:02d}:{em:02d}          -> {title}')
+
+
+def preview_range(start_str: str, end_str: str, use_coptic: bool = True) -> None:
+    day = datetime.strptime(start_str, '%Y-%m-%d')
+    end = datetime.strptime(end_str, '%Y-%m-%d')
+    while day <= end:
+        preview_titles([day.strftime('%Y-%m-%d')], use_coptic=use_coptic)
+        day += timedelta(days=1)
+
+
+class _FeastOnceTracker:
+    """Mirrors StateStore.consume_feast_title for the offline preview CLI:
+    a feast title is only handed out once per date within a single run."""
+
+    def __init__(self):
+        self._used_dates: set[str] = set()
+
+    def consume(self, date_str: str, feast_title: str | None) -> str | None:
+        if not feast_title or date_str in self._used_dates:
+            return None
+        self._used_dates.add(date_str)
+        return feast_title
 
 
 # ===========================================================================
@@ -483,6 +628,17 @@ class StateStore:
         self._data['last_title_at'] = time.time()
         self._data['last_title_broadcast_id'] = broadcast_id
         self._save()
+
+    # -- feast override (once per day)
+    def consume_feast_title(self, date_str: str, feast_title: str | None) -> str | None:
+        """Returns feast_title only the first time it's consumed for a given
+        date; later calls that day (e.g. a second stream start) return None
+        so the weekly schedule takes over. Persisted, so it survives restarts."""
+        if not feast_title or self._data.get('feast_used_date') == date_str:
+            return None
+        self._data['feast_used_date'] = date_str
+        self._save()
+        return feast_title
 
 
 # ===========================================================================
@@ -1161,6 +1317,7 @@ class TitleBot:
         self._stop: asyncio.Event | None = None
         self._pending: set[asyncio.Task] = set()
         self._last_start_monotonic = 0.0
+        self._feast_cache: dict[str, str | None] = {}
 
     # -- OBS callback: runs on the obsws background thread ------------------
     def on_stream_state_changed(self, data) -> None:
@@ -1237,6 +1394,30 @@ class TitleBot:
         except Exception:
             return False
 
+    # -- coptic.io feast lookup ----------------------------------------------
+    async def _lookup_feast_title(self, now: datetime) -> str | None:
+        if not COPTIC_CALENDAR_ENABLED:
+            return None
+
+        date_str = now.strftime('%Y-%m-%d')
+        if date_str not in self._feast_cache:
+            try:
+                self._feast_cache = {
+                    date_str: await asyncio.to_thread(resolve_feast_title, date_str)
+                }
+            except Exception as exc:
+                log.warning('Coptic calendar lookup failed (%s); using the weekly schedule.', exc)
+                return None
+
+        raw_feast_title = self._feast_cache[date_str]
+        feast_title = self.state.consume_feast_title(date_str, raw_feast_title)
+        if feast_title:
+            log.info('📅 Today is a feast day per coptic.io: "%s".', feast_title)
+        elif raw_feast_title:
+            log.info('📅 Feast title already used for an earlier stream today; '
+                     'using the weekly schedule.')
+        return feast_title
+
     # -- async worker -------------------------------------------------------
     async def _worker(self) -> None:
         while True:
@@ -1260,7 +1441,9 @@ class TitleBot:
         # Refresh the key each time: the operator may have changed it in OBS.
         self.manager.obs_stream_key = await asyncio.to_thread(self._read_obs_stream_key)
 
-        title = generate_title()
+        now = datetime.now()
+        feast_title = await self._lookup_feast_title(now)
+        title = generate_title(now, feast_title=feast_title)
         log.info('Target title: %s', title)
 
         try:
@@ -1532,5 +1715,37 @@ def main() -> None:
         logging.shutdown()
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description='OBS -> YouTube live-broadcast bot.')
+    subparsers = parser.add_subparsers(dest='command')
+
+    preview = subparsers.add_parser(
+        'preview', help='Print the title(s) that would be generated and exit (no OBS/YouTube).'
+    )
+    preview.add_argument(
+        'dates', nargs='*',
+        help="Date (YYYY-MM-DD) or datetime (YYYY-MM-DD HH:MM / YYYY-MM-DDTHH:MM). "
+             "Defaults to now."
+    )
+    preview.add_argument(
+        '--range', nargs=2, metavar=('START', 'END'),
+        help='Preview every day (YYYY-MM-DD) from START to END inclusive.'
+    )
+    preview.add_argument(
+        '--no-coptic', action='store_true',
+        help='Skip the coptic.io feast lookup (offline schedule only).'
+    )
+    return parser
+
+
 if __name__ == '__main__':
-    main()
+    args = _build_arg_parser().parse_args()
+    if args.command == 'preview':
+        use_coptic = not args.no_coptic
+        if args.range:
+            preview_range(args.range[0], args.range[1], use_coptic=use_coptic)
+        dates = args.dates or ([] if args.range else [datetime.now().strftime('%Y-%m-%d %H:%M')])
+        if dates:
+            preview_titles(dates, use_coptic=use_coptic)
+    else:
+        main()
