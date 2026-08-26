@@ -194,6 +194,7 @@ COPTIC_API_BASE_URL = 'https://api.coptic.io/api'
 COPTIC_API_TIMEOUT_SECONDS = 8
 COPTIC_FEAST_EXCLUDE_TYPES = {'fast', 'commemoration'}
 COPTIC_LORDLY_FEAST_TYPES = {'lordlyFeast', 'majorFeast'}
+COPTIC_EVE_FEAST_KEYWORDS = ('theophany', 'nativity', 'easter', 'resurrection')
 
 
 def validate_schedule() -> list[str]:
@@ -242,6 +243,7 @@ def _fit(base: str, date_str: str, suffix: str) -> str:
 
 
 def generate_title(now: datetime | None = None, feast_title: str | None = None) -> str:
+    """Generate an API feast title when provided; otherwise use the schedule."""
     now = now or datetime.now()
     minutes = now.hour * 60 + now.minute
 
@@ -266,33 +268,63 @@ def fetch_coptic_celebrations(date_str: str) -> list[dict]:
 
 
 def _feast_display_name(name: str) -> str:
-    if 'easter' in name.lower():        # traditional Coptic name over the API's
-        name = 'Resurrection'
-    return name if 'feast' in name.lower() else f'Feast of the {name}'
+    lowered = name.lower()
+    if 'holy thursday' in lowered:
+        return 'Covenant Thursday'
+    if 'palm sunday' in lowered:
+        return 'Palm Sunday'
+    if 'thomas sunday' in lowered:
+        return 'Thomas Sunday'
+    if 'st. mary feast (commemoration of her assumption)' in lowered:
+        return 'Feast of St. Mary (Commemoration of Her Assumption)'
+    if 'nativity' in lowered:
+        feast_name = 'Nativity'
+    elif 'theophany' in lowered:
+        feast_name = 'Theophany'
+    elif 'easter' in lowered or 'resurrection' in lowered:
+        feast_name = 'Resurrection'
+    else:
+        feast_name = name.removeprefix('Feast of the ')
+    return f'Feast of the {feast_name}'
 
 
 def pick_feast_title(celebrations: list[dict]) -> str | None:
-    """First non-fast/commemoration entry, worded to always read as a feast."""
+    """Return the first API feast title, or None when no feast is reported."""
     for item in celebrations:
         name = item.get('name')
-        if isinstance(name, str) and item.get('type') not in COPTIC_FEAST_EXCLUDE_TYPES:
+        feast_type = item.get('type')
+        if (isinstance(name, str)
+                and feast_type
+                and feast_type not in COPTIC_FEAST_EXCLUDE_TYPES):
             return _feast_display_name(name)
     return None
 
 
 def pick_lordly_feast_title(celebrations: list[dict]) -> str | None:
-    """Restricted to the 7-major-feasts types; used for the eve-of override."""
+    """Pick only the three feasts whose titles are used on the eve."""
     for item in celebrations:
         name = item.get('name')
-        if isinstance(name, str) and item.get('type') in COPTIC_LORDLY_FEAST_TYPES:
+        if (isinstance(name, str)
+                and item.get('type') in COPTIC_LORDLY_FEAST_TYPES
+                and any(keyword in name.lower()
+                        for keyword in COPTIC_EVE_FEAST_KEYWORDS)):
             return _feast_display_name(name)
     return None
 
 
 def resolve_feast_title(date_str: str) -> str | None:
-    """Today's own feast takes priority; otherwise, if tomorrow is a major
-    Lordly feast, its title is used tonight -- the eve of the feast."""
-    feast_title = pick_feast_title(fetch_coptic_celebrations(date_str))
+    """Resolve today's title, using the next day's feast after a Paramoun."""
+    celebrations = fetch_coptic_celebrations(date_str)
+    feast_title = pick_feast_title(celebrations)
+
+    if any(
+            'paramoun' in item.get('name', '').lower()
+            for item in celebrations
+            if isinstance(item.get('name'), str)):
+        next_date_str = (datetime.strptime(date_str, '%Y-%m-%d')
+                         + timedelta(days=1)).strftime('%Y-%m-%d')
+        feast_title = pick_feast_title(fetch_coptic_celebrations(next_date_str))
+
     if feast_title:
         return feast_title
 
