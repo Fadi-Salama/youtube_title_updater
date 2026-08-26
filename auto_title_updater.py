@@ -153,29 +153,24 @@ log = logging.getLogger('titlebot')
 # ===========================================================================
 # SERVICE SCHEDULE  (weekday: 0=Mon .. 6=Sun; windows are [start, end) local)
 # ===========================================================================
-DEFAULT_TITLE = '+++ Saint Mary and Archangel Michael Service'
+DEFAULT_TITLE = '+++ Saint Mary and Archangel Michael Live Service'
 
 SERVICE_SCHEDULE = (
-    (0, (17, 45), (18, 15), '+++ Vespers and Venerations for Saint Mary'),      # Monday 5:45-6:15pm
-    (1, (4, 30), (5, 0), '+++ Tuesday Liturgy'),                                # Tuesday 4:30-5:00am
-    (2, (8, 30), (9, 0), '+++ Wednesday Liturgy'),                              # Wednesday 8:30-9:00am
-    (2, (17, 45), (18, 15), '+++ Vespers and Venerations for Saint Mary'),      # Wednesday 5:45-6:15pm
-    (3, (9, 30), (10, 0), '+++ Thursday Liturgy'),                              # Thursday 9:30-10:00am
-    (3, (17, 45), (18, 15), '+++ Vespers and Venerations for Saint Mary'),      # Thursday 5:45-6:15pm
-    (4, (17, 45), (18, 15), '+++ Vespers and Venerations for Saint Mary'),      # Friday 5:45-6:15pm
-    (5, (8, 0), (8, 30), '+++ Saturday Liturgy'),                               # Saturday 8:00-8:30am
-    (5, (17, 45), (18, 15), '+++ Saturday Vespers'),                            # Saturday 5:45-6:15pm
-    (5, (20, 15), (20, 45), '+++ Midnight Praises'),                            # Saturday 8:15-8:45pm
-    (6, (7, 30), (8, 0), '+++ Sunday Liturgy'),                                 # Sunday 7:30-8:00am
-    (6, (18, 15), (18, 45), '+++ Sunday night Bible Study'),                    # Sunday 6:15-6:45pm
+    (1, (4, 30), (5, 15), '+++ Tuesday Liturgy'),                   # Tuesday 4:30-5:15am
+    (2, (8, 30), (9, 15), '+++ Wednesday Liturgy'),                 # Wednesday 8:30-9:15am
+    (3, (9, 30), (10, 15), '+++ Thursday Liturgy'),                 # Thursday 9:30-10:15am
+    (5, (8, 0), (8, 45), '+++ Saturday Liturgy'),                   # Saturday 8:00-8:45am
+    (5, (17, 45), (18, 30), '+++ Saturday Vespers'),                # Saturday 5:45-6:30pm
+    (5, (20, 15), (21, 0), '+++ Midnight Praises'),                 # Saturday 8:15-9:00pm
+    (6, (7, 30), (8, 15), '+++ Sunday Liturgy'),                    # Sunday 7:30-8:15am
+    (6, (18, 15), (19, 0), '+++ Sunday night Bible Study'),         # Sunday 6:15-7:00pm
 )
 
 # Arabic suffix chosen by keyword, first match wins.
 TITLE_SUFFIXES = (
     ('Liturgy', 'القداس الالهي +++'),
-    ('Vespers and Venerations', 'رفع بخور عشية وتَمجيد للسيدة العذراء +++'),
-    ('Vespers', 'رفع بخور عشية +++'),
-    ('Midnight Praises', 'تسبيحات نصف الليل +++'),
+    ('Vespers', 'رفع بخور عشية و اجتماع الانبا موسي +++'),
+    ('Midnight Praises', 'تسبيحة نصف الليل +++'),
 )
 DEFAULT_SUFFIX = '+++'
 
