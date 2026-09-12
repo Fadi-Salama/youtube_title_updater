@@ -95,6 +95,7 @@ DAILY_QUOTA_BUDGET = 9_500                 # headroom under the 10,000 allowance
 
 # --- BROADCAST CREATION ---
 CREATE_BROADCAST_IF_MISSING = True
+PREFER_MANUAL_SCHEDULED_BROADCAST = True   # use an operator-scheduled broadcast as-is
 BROADCAST_PRIVACY = 'public'               # 'public' | 'unlisted' | 'private'
 BROADCAST_MADE_FOR_KIDS = False            # required by the API
 BROADCAST_DESCRIPTION = (
@@ -867,6 +868,40 @@ class YouTubeBroadcastManager:
             self.state.list_strategy = None
         return None
 
+    async def find_manual_broadcast(self) -> dict | None:
+        """Find a broadcast the operator scheduled by hand in YouTube Studio
+        (live or upcoming), so it can be driven live untouched instead of
+        creating or renaming one. Excludes broadcasts the bot itself created."""
+        exclude_id = self.state.created_broadcast_id
+
+        for status in ('active', 'upcoming'):
+            items = await self._list_by_status(status)
+            candidates = [item for item in items if item.get('id') != exclude_id]
+            if not candidates:
+                continue
+
+            def sort_key(item: dict):
+                status_name = item.get('status', {}).get('lifeCycleStatus', '')
+                snippet = item.get('snippet', {})
+                return (LIFECYCLE_PRIORITY.get(status_name, 99),
+                        snippet.get('scheduledStartTime') or '')
+
+            candidates.sort(key=sort_key)
+            return candidates[0]
+        return None
+
+    async def use_manual_broadcast(self, broadcast: dict) -> str | None:
+        """Bind a manually scheduled broadcast to the active stream if needed,
+        without touching its title."""
+        broadcast_id = broadcast['id']
+        bound = broadcast.get('contentDetails', {}).get('boundStreamId')
+        if not bound:
+            stream_id = await self.resolve_stream_id()
+            await self.bind_broadcast(broadcast_id, stream_id)
+            bound = stream_id
+        self.state.broadcast_id = broadcast_id
+        return bound
+
     # -- ingest stream selection --------------------------------------------
     async def _list_streams(self) -> list[dict]:
         request = self.youtube.liveStreams().list(
@@ -1462,6 +1497,24 @@ class TitleBot:
             finally:
                 self._queue.task_done()
 
+    async def _resolve_broadcast(self) -> tuple[str, str | None]:
+        """Use an operator-scheduled broadcast untouched if one exists;
+        otherwise generate the weekly/feast title and create or rename one."""
+        if PREFER_MANUAL_SCHEDULED_BROADCAST:
+            manual = await self.manager.find_manual_broadcast()
+            if manual is not None:
+                log.info('📌 Using manually scheduled broadcast %s ("%s"); '
+                         'skipping title generation.',
+                         manual['id'], manual.get('snippet', {}).get('title', ''))
+                stream_id = await self.manager.use_manual_broadcast(manual)
+                return manual['id'], stream_id
+
+        now = datetime.now()
+        feast_title = await self._lookup_feast_title(now)
+        title = generate_title(now, feast_title=feast_title)
+        log.info('Target title: %s', title)
+        return await self.manager.ensure_broadcast(title)
+
     async def _handle_start(self, attempt: int) -> None:
         if attempt == 0 and LOOKUP_INITIAL_DELAY_SECONDS:
             await asyncio.sleep(LOOKUP_INITIAL_DELAY_SECONDS)
@@ -1469,13 +1522,8 @@ class TitleBot:
         # Refresh the key each time: the operator may have changed it in OBS.
         self.manager.obs_stream_key = await asyncio.to_thread(self._read_obs_stream_key)
 
-        now = datetime.now()
-        feast_title = await self._lookup_feast_title(now)
-        title = generate_title(now, feast_title=feast_title)
-        log.info('Target title: %s', title)
-
         try:
-            broadcast_id, stream_id = await self.manager.ensure_broadcast(title)
+            broadcast_id, stream_id = await self._resolve_broadcast()
         except QuotaBlocked as exc:
             log.error('⏳ %s', exc)
             return
