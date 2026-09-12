@@ -156,20 +156,21 @@ log = logging.getLogger('titlebot')
 DEFAULT_TITLE = '+++ Saint Mary and Archangel Michael Live Service'
 
 SERVICE_SCHEDULE = (
-    (1, (4, 30), (5, 15), '+++ Tuesday Liturgy'),                   # Tuesday 4:30-5:15am
-    (2, (8, 30), (9, 15), '+++ Wednesday Liturgy'),                 # Wednesday 8:30-9:15am
-    (3, (9, 30), (10, 15), '+++ Thursday Liturgy'),                 # Thursday 9:30-10:15am
-    (5, (8, 0), (8, 45), '+++ Saturday Liturgy'),                   # Saturday 8:00-8:45am
-    (5, (17, 45), (18, 30), '+++ Saturday Vespers'),                # Saturday 5:45-6:30pm
-    (5, (20, 15), (21, 0), '+++ Midnight Praises'),                 # Saturday 8:15-9:00pm
-    (6, (7, 30), (8, 15), '+++ Sunday Liturgy'),                    # Sunday 7:30-8:15am
-    (6, (18, 15), (19, 0), '+++ Sunday night Bible Study'),         # Sunday 6:15-7:00pm
+    (1, (4, 30), (5, 15), '+++ Tuesday Liturgy'),                                          # Tuesday 4:30-5:15am
+    (2, (8, 30), (9, 15), '+++ Wednesday Liturgy'),                                        # Wednesday 8:30-9:15am
+    (3, (9, 30), (10, 15), '+++ Thursday Liturgy'),                                        # Thursday 9:30-10:15am
+    (5, (8, 0), (8, 45), '+++ Saturday Liturgy'),                                          # Saturday 8:00-8:45am
+    (5, (17, 45), (18, 30), '+++ Saturday Vespers'),                                       # Saturday 5:45-6:30pm
+    (5, (20, 15), (21, 0), '+++ Midnight Praises'),                                        # Saturday 8:15-9:00pm
+    (6, (7, 30), (8, 15), '+++ Sunday Liturgy'),                                           # Sunday 7:30-8:15am
+    (6, (18, 15), (19, 0), '+++ Sunday night Bible Study'),                                # Sunday 6:15-7:00pm
 )
 
 # Arabic suffix chosen by keyword, first match wins.
 TITLE_SUFFIXES = (
     ('Liturgy', 'القداس الالهي +++'),
-    ('Vespers', 'رفع بخور عشية و اجتماع الانبا موسي +++'),
+    ('Vespers', 'رفع بخور عشية +++'),
+    ('Saturday Vespers', 'رفع بخور عشية و اجتماع الانبا موسي +++'),
     ('Midnight Praises', 'تسبيحة نصف الليل +++'),
 )
 DEFAULT_SUFFIX = '+++'
