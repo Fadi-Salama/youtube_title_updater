@@ -50,6 +50,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 from zoneinfo import ZoneInfo
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -688,6 +689,22 @@ def get_youtube_client():
             try:
                 creds.refresh(Request())
                 refreshed = True
+            except RefreshError as exc:
+                # invalid_grant here almost always means the refresh token died.
+                # While the OAuth consent screen is in "Testing" publishing status,
+                # Google hard-caps refresh tokens at 7 days regardless of activity;
+                # publishing the app (Cloud Console > OAuth consent screen > Publish
+                # App) removes that cap and is the only real fix for this recurring.
+                log.warning(
+                    'Refresh token rejected (%s). If this keeps happening every ~7 '
+                    'days, your OAuth consent screen is still in "Testing" status; '
+                    'publish it to Production to stop refresh tokens from expiring. '
+                    'Falling back to interactive consent now.', exc,
+                )
+                try:
+                    os.remove(TOKEN_FILE)
+                except OSError:
+                    pass
             except Exception as exc:
                 log.warning('Token refresh failed (%s); running consent flow.', exc)
         if not refreshed and (not creds or not creds.valid):
